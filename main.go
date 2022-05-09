@@ -20,6 +20,8 @@ type Article struct {
 }
 
 var Articles []Article
+var tlsKey string = "tls/tls.key"
+var tlsCert string = "tls/tls.crt"
 
 func homepage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<h1>Welcome to homepage</h1>")
@@ -217,9 +219,13 @@ func handleRequests() {
 
 	// http.HandleFunc("/", homepage)
 	// http.HandleFunc("/articles", getAllArticles)
-	fmt.Println("Starting server at port 30000")
+
 	if !*tlsFlag {
+		fmt.Println("Starting server at port 30000")
 		log.Fatal(http.ListenAndServe(":30000", router))
+	} else {
+		fmt.Println("Starting secure server at port 30443")
+		log.Fatal(http.ListenAndServeTLS(":30443", tlsCert, tlsKey, router))
 	}
 }
 
