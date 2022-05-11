@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"golang.org/x/crypto/scrypt"
 )
 
 type Article struct {
@@ -19,7 +21,14 @@ type Article struct {
 	Content     string `json:"content"`
 }
 
+type Credential struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Salt     string `json:"salt"`
+}
+
 var Articles []Article
+var Auth []Credential
 var tlsKey string = "tls/tls.key"
 var tlsCert string = "tls/tls.crt"
 
@@ -191,6 +200,102 @@ func updateArticle(w http.ResponseWriter, r *http.Request) {
 	log.Println("Status:", http.StatusNotFound, "No article found with id", id)
 }
 
+func signUp(w http.ResponseWriter, r *http.Request) {
+	log.Println(r.Method, r.RequestURI, r.Proto, r.Host)
+	bodyContent, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to read request body")
+		return
+	}
+
+	var reqUserPass Credential
+
+	json.Unmarshal(bodyContent, &reqUserPass)
+
+	// Read auth database
+	authDb, err := ioutil.ReadFile("auth.json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to read authentication database")
+		return
+	}
+
+	json.Unmarshal(authDb, &Auth)
+
+	for _, creds := range Auth {
+		if creds.Username == reqUserPass.Username {
+			json.NewEncoder(w).Encode("User already exists")
+			w.WriteHeader(http.StatusOK)
+			log.Println("Status:", http.StatusOK, "OK")
+			return
+		}
+	}
+
+	salt, err := generateSalt()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to generate salt")
+		return
+	}
+
+	hashedPassword, err := generateHash(reqUserPass.Password, salt)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to generate hashed password")
+		return
+	}
+
+	reqUserPass.Password = hashedPassword
+	reqUserPass.Salt = salt
+
+	Auth = append(Auth, reqUserPass)
+	updatedAuth, err := json.Marshal(&Auth)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to update auth database")
+		return
+	}
+
+	err = ioutil.WriteFile("auth.json", updatedAuth, 0664)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode("Something went wrong")
+		log.Println("Status:", http.StatusInternalServerError, "Failed to update auth database")
+		return
+	}
+	json.NewEncoder(w).Encode("Sign Up successful.")
+	log.Println("Status:", http.StatusOK, "OK")
+}
+
+func generateSalt() (string, error) {
+	token := make([]byte, 8) // 8 bytes = 64 bits salt
+	_, err := rand.Read(token)
+	if err != nil {
+		return "", err
+	}
+	return string(token), nil
+}
+
+func generateHash(data, salt string) (string, error) {
+	dataBytes := []byte(data)
+	saltBytes := []byte(salt)
+
+	hash, err := scrypt.Key(dataBytes, saltBytes, 32768, 8, 1, 32) // Generates 32 bytes hash using scrypt kdf
+
+	if err != nil {
+		return "", err
+	}
+
+	return string(hash), nil
+
+}
+
 func handleRequests() {
 
 	tlsFlag := flag.Bool("tls", false, "--tls=true|false Default: false")
@@ -219,6 +324,10 @@ func handleRequests() {
 
 	// http.HandleFunc("/", homepage)
 	// http.HandleFunc("/articles", getAllArticles)
+
+	// Sign up
+
+	router.HandleFunc("/signup", signUp).Methods("POST")
 
 	if !*tlsFlag {
 		fmt.Println("Starting server at port 30000")
